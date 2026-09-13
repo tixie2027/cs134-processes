@@ -3,53 +3,128 @@
 proc_t *curproc;
 
 /*
- * TODO: implement me!
- * Hints: we don't have any processes running yet... but what from the process
- * subsystem needs to be initialized?
+ * Initialize process subsystem
  */
 void proc_init() {
-
+    // Initialize subsystem's global attributes
+    list_init(&proc_list);          // List of all processes
+    spinlock_init(&proc_list_lock); // Spinlock for list of all processes
+    next_pid = 1;                   // initproc has pid 1
+    // TODO: Not sure here?
+    slab_allocator_init(&proc_allocator, sizeof(proc_t));
 }
 
 /*
- * TODO: implement me!
- * The idle process is a special process that is created by kmain
- * its job is to be the first process on the system, but it does not have any
- * associated threads
- * Hints:
- *   - what would the fields of the process struct be set to for idleproc?
- *   - what is the initial value of curproc? curthr? 
+ *   Initialize idle process (special process with no threads)
  */
 void proc_idleproc_init() {
+    // Initialize pid and name
+    idleproc.p_pid = 0;
+    strncpy(idleproc.p_name, "idle", MAX_STRING_LEN);
+    idleproc.p_status = 0;
 
+    // Initialize lists
+    list_init(&idleproc.p_threads); // Not used
+    list_init(&idleproc.p_children);
+
+    // Initialize locks
+    spinlock_init(&idleproc.p_threads_lock); // Not used
+    spinlock_init(&idleproc.p_children_lock);
+
+    // No parent
+    idleproc.p_pproc = NULL;
+
+    // Initialize the links (never used)
+    list_link_init(&idleproc.p_list_link, &idleproc);
+    list_link_init(&idleproc.p_child_link, &idleproc);
+
+    // Active immediately
+    idleproc.p_state = PROC_RUNNING;
+
+    // No threads running yet
+    curproc = &idleproc;
+    curthr = NULL;
 }
 
 /*
  * This function is implemented to tell the system to shut down and exit
  */
-void initproc_finish() {
-    context_switch(&curthr->kt_ctx, &bios_ctx);
-}
+void initproc_finish() { context_switch(&curthr->kt_ctx, &bios_ctx); }
 
 /*
- * TODO: implement me!
- * Hints:
- *   - make space for the new process using the process allocator
- *   - we need to update the global structures
- *   - the process becomes a child of the current process
- *   - don't forget to synchronize on shared structures!
+ * Create a new process as a child of the currently running process
  */
 proc_t *proc_create(const char *name) {
-    return NULL;
+    // Remember parent in case "curproc" changes
+    proc_t *parent = curproc;
+
+    // Allocate space for the new process
+    proc_t *proc = slab_obj_alloc(proc_allocator);
+    if (proc == NULL) {
+        // TODO:
+        // Out of memory - throw an error
+        return NULL;
+    }
+
+    // INIT THE PROCESS
+
+    spinlock_lock(&proc_list_lock);
+    proc->p_pid = next_pid;
+    next_pid++;
+    spinlock_unlock(&proc_list_lock);
+
+    strncpy(proc->p_name, name, MAX_STRING_LEN);
+
+    proc->p_status = 0; // Default status?
+    proc->p_state = PROC_PENDING;
+
+    list_init(&(proc->p_threads));
+    list_init(&(proc->p_children));
+
+    spinlock_init(&(proc->p_threads_lock));
+    spinlock_init(&(proc->p_children_lock));
+
+    proc->p_pproc = parent;
+
+    list_link_init(&(proc->p_list_link), proc);
+    list_link_init(&(proc->p_child_link), proc);
+
+    // Add new proc to parent's list (synchronize)
+    spinlock_lock(&(parent->p_children_lock));
+    list_insert_back(&(parent->p_children), &(proc->p_child_link));
+    spinlock_unlock(&(parent->p_children_lock));
+
+    // Add new proc to global list of procs (synchronize)
+    spinlock_lock(&proc_list_lock);
+    list_insert_back(&proc_list, &(proc->p_list_link));
+    spinlock_unlock(&proc_list_lock);
+
+    return proc;
 }
 
 /*
  * TODO: implement me!
  * Hints: anything that was allocated needs to be deallocated... deallocated
  * objects should not be accessible by anyone else!
+ *
+ * Destroy a process by removing from all lists and freeing memory
  */
 void proc_destroy(proc_t *proc) {
+    // Remove from parents' children list
+    proc_t *parent = proc->p_pproc;
+    if (parent != NULL) {
+        spinlock_lock(&(parent->p_children_lock));
+        list_remove_link(&(parent->p_children), &proc->p_child_link);
+        spinlock_unlock(&(parent->p_children_lock));
+    }
 
+    // Remove from list of all processes
+    spinlock_lock(&proc_list_lock);
+    list_remove_link(&proc_list, &(proc->p_list_link));
+    spinlock_unlock(&proc_list_lock);
+
+    // Free proc descriptor
+    slab_obj_free(proc_allocator, proc);
 }
 
 /*
@@ -58,7 +133,9 @@ void proc_destroy(proc_t *proc) {
  * objects should not be accessible by anyone else!
  */
 void proc_cleanup() {
-
+    // Mark current process as dead
+    curproc->p_state = PROC_DEAD;
+    // TODO: is this it?
 }
 
 /*
@@ -66,7 +143,13 @@ void proc_cleanup() {
  * Hints: how should a process behave if all threads exit?
  */
 void proc_thread_exiting(void *retval) {
+    // Remember thread in case "curthr" changes
+    kthread_t *thread = curthr;
 
+    spinlock_lock(&(thread->kt_lock));
+    thread->kt_retval = retval;
+    thread->kt_state = KT_EXITED;
+    spinlock_unlock(&(thread->kt_lock));
 }
 
 /*
@@ -75,9 +158,7 @@ void proc_thread_exiting(void *retval) {
  *   - cancel all threads associated with the provided process
  *   - protect access to the threads list
  */
-void proc_kill(proc_t *proc, long status) {
-
-}
+void proc_kill(proc_t *proc, long status) {}
 
 /*
  * TODO: implement me!
@@ -86,6 +167,4 @@ void proc_kill(proc_t *proc, long status) {
  *  - kill the current process at the very end... don't kill before function
  * finishes!
  */
-void proc_kill_all() {
-
-}
+void proc_kill_all() {}
