@@ -20,9 +20,10 @@ void strncpy(char *dest, const char *src, long len) {
 
 /*
  * Return the length of a string
+ * TODO: int vs long?
  */
-long strlen(const char *str) {
-    long length = 0;
+int strlen(const char *str) {
+    int length = 0;
 
     while (str[length] != '\0') {
         length++;
