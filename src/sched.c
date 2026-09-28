@@ -1,6 +1,6 @@
+#include "sched.h"
 #include "context.h"
 #include "kthread.h"
-#include "sched.h"
 
 void sched_init() {
     // initialize run queue
@@ -13,15 +13,17 @@ void sched_switch() {
     spinlock_lock(&kt_runq.tq_lock);
     if (kt_runq.tq_list.size == 0) {
         return; // uh oh! nobody else to run... just exit
+                // TODO: bug, the lock wasn't released
     }
 
     context_t *old_ctx;
     kthread_t *next_thread;
     while (1) {
         old_ctx = &curthr->kt_ctx;
-        next_thread = (kthread_t *) list_remove_front(&kt_runq.tq_list)->parent;
+        next_thread = (kthread_t *)list_remove_front(&kt_runq.tq_list)->parent;
 
         // if next_thread is cancelled, don't run it...
+        // TODO: Is this a BUG? should it check for cancelled?
         if (next_thread->kt_state != KT_RUNNABLE) {
             list_insert_back(&kt_runq.tq_list, &next_thread->kt_qlink);
         } else {
@@ -38,7 +40,6 @@ void sched_switch() {
     }
 
     spinlock_unlock(&kt_runq.tq_lock);
-
 
     // set curthr and curproc
     curthr = next_thread;
